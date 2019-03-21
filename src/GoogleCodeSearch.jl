@@ -29,7 +29,8 @@ function readcmd_with_index(ctx::Ctx, cmd::Cmd, idxpath::String)
             OutputCollector(cmd)
         end
     end
-    wait(oc), oc.stdout_linestream.lines, oc.stderr_linestream.lines
+    success = wait(oc)
+    success, oc.stdout_linestream.lines, oc.stderr_linestream.lines
 end
 
 indices(ctx::Ctx) = map(x->joinpath(ctx.store,x), readdir(ctx.store))

@@ -29,7 +29,8 @@ path22, file2, line2
 ]
 
 # split index on the last alphabet of path component of test_data
-test_index_resolver(ctx::Ctx, inpath::String) = joinpath(ctx.store, "index" * rsplit(inpath, '/'; limit=2)[1][end])
+test_index_resolver(ctx::Ctx, inpath::String) = joinpath(ctx.store, "index" * rsplit(inpath, '/'; limit=2)[end][end])
+test_default_resolver(ctx::Ctx, inpath::String) = joinpath(ctx.store, "index")
 
 function test_noindices(ctx::Ctx)
     @test isempty(paths_indexed(ctx))
@@ -43,7 +44,9 @@ end
 
 function test_indexing(ctx::Ctx, datadir::String)
     paths = Set(joinpath(datadir, item.path) for item in test_data)
-    for path in paths
+    # paths must be in sorted order during indexing, otherwise indexer will remove a longer path when it encounters a path that is a substring of that
+    for path in sort(collect(paths))
+        @info("indexing $path")
         @test index(ctx, path)
         @test !isempty(indices(ctx))
         @test any(occursin(x, path) for x in paths_indexed(ctx))
@@ -102,13 +105,13 @@ function create_test_data(datadir::String)
     end
 end
 
-function all_tests(testdir)
+function all_tests(testdir, resolver)
     storedir = joinpath(testdir, "store") 
     datadir = joinpath(testdir, "data")
     create_test_data(datadir)
     mkpath(storedir)
 
-    ctx = Ctx(store=storedir)
+    ctx = Ctx(store=storedir, resolver=resolver)
     test_noindices(ctx)
     test_indexing(ctx, datadir)
     test_search(ctx, datadir)
@@ -118,6 +121,9 @@ function all_tests(testdir)
     nothing
 end
 
-mktempdir() do testdir
-    all_tests(testdir)
+for (resolver_name,resolver) in ("split_index"=>test_index_resolver, "single_index"=>test_default_resolver)
+    println("testing with $resolver_name")
+    mktempdir() do testdir
+        all_tests(testdir, resolver)
+    end
 end
