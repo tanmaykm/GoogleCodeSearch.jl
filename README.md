@@ -52,3 +52,12 @@ julia> search(ctx, "Include"; ignorecase=true, pathfilter=".*dir1.*")
  ...
 ```
 
+A HTTP service with JSON interface can be brought up with the `run_http` method. Use optional parameter `ops` to sepcify the operations that should be exposed. Additional keywords, identical to what `HTTP.serve` would accept can also be passed to this method to enable other features e.g. SSL, port reuse.
+
+```julia
+julia> using GoogleCodeSearch
+
+julia> ctx = Ctx();
+
+julia> run_http(ctx; host=ip"0.0.0.0", port=5555, ops=(:index, :search))
+```
