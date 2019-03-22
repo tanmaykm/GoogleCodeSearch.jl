@@ -2,6 +2,8 @@
 
 A Julia wrapper over [Google Code Search](https://github.com/google/codesearch).
 
+[![Build Status](https://travis-ci.org/tanmaykm/GoogleCodeSearch.jl.svg?branch=master)](https://travis-ci.org/tanmaykm/GoogleCodeSearch.jl)
+
 A context (`Ctx`) instance encapsulates the index location and provides a useful way to split indexing across multiple indices. It also holds a lock to handle it being called across tasks.
 
 ```julia
