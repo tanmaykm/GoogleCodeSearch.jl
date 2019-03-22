@@ -1,5 +1,8 @@
 using GoogleCodeSearch
 using Test
+using HTTP
+using JSON
+using Sockets
 
 const test_data = [
 (path="path1", file="file1", content="""
@@ -105,7 +108,7 @@ function create_test_data(datadir::String)
     end
 end
 
-function all_tests(testdir, resolver)
+function test_apis(testdir, resolver)
     storedir = joinpath(testdir, "store") 
     datadir = joinpath(testdir, "data")
     create_test_data(datadir)
@@ -118,12 +121,62 @@ function all_tests(testdir, resolver)
 
     @test clear_indices(ctx) === nothing
     test_noindices(ctx)
+
     nothing
+end
+
+function test_http_service(testdir)
+    storedir = joinpath(testdir, "store")
+    datadir = joinpath(testdir, "data")
+    create_test_data(datadir)
+    mkpath(storedir)
+
+    ctx = Ctx(store=storedir)
+    srvr = @async run_http(ctx)
+    wait_for_httpsrvr()
+
+    paths = Set(joinpath(datadir, item.path) for item in test_data)
+    # paths must be in sorted order during indexing, otherwise indexer will remove a longer path when it encounters a path that is a substring of that
+    for path in sort(collect(paths))
+        resp = HTTP.request("POST", "http://127.0.0.1:5555/index"; body="{\"path\":\"$path\"}")
+        @test resp.status == 200
+        json_resp = JSON.parse(String(resp.body))
+        @test json_resp["success"]
+    end
+
+    resp = HTTP.request("POST", "http://127.0.0.1:5555/search"; body="{\"pattern\":\"line1\"}")
+    @test resp.status == 200
+    json_resp = JSON.parse(String(resp.body))
+    @test json_resp["success"]
+    data = json_resp["data"]
+    @test length(data) == 6
+    for item in data
+        @test item["line"] == 1
+        @test endswith(strip(item["text"]), "line1")
+    end
+end
+
+function wait_for_httpsrvr()
+    while true
+        try
+            sock = connect("127.0.0.1", 5555)
+            close(sock)
+            return
+        catch
+            @info("waiting for httpserver to come up at port 5555...")
+            sleep(5)
+        end
+    end
 end
 
 for (resolver_name,resolver) in ("split_index"=>test_index_resolver, "single_index"=>test_default_resolver)
     println("testing with $resolver_name")
     mktempdir() do testdir
-        all_tests(testdir, resolver)
+        test_apis(testdir, resolver)
     end
+end
+
+println("testing HTTP service")
+mktempdir() do testdir
+    test_http_service(testdir)
 end
