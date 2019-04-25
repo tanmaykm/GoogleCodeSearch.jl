@@ -104,7 +104,6 @@ function search(ctx::Ctx, pattern::String; ignorecase::Bool=false, pathfilter::U
     push!(cmdparts, pattern)
     cmd = Cmd(cmdparts)
     results = Vector{NamedTuple{(:file,:line,:text),Tuple{String,Int,String}}}()
-    count = 0
     for idx in readdir(ctx.store)
         idxpath = joinpath(ctx.store, idx)
         success, out, err = readcmd_with_index(ctx, cmd, idxpath)
@@ -114,10 +113,9 @@ function search(ctx::Ctx, pattern::String; ignorecase::Bool=false, pathfilter::U
                 ( isempty(s) || !startswith(s, "/")) && continue
                 parts = split(s, ':'; limit=3)
                 (length(parts) != 3) && continue
-                (count > maxresults) && (return results)
+                (length(results) > maxresults) && (return results)
                 try
                     push!(results, (file=String(parts[1]), line=parse(Int,parts[2]), text=String(parts[3])))
-                    count += 1
                 catch ex
                     @info "Exception: ",ex
                 end
