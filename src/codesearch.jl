@@ -93,7 +93,7 @@ The search method returns a vector of named tuples, each describing a match.
 - `line`: line number therein that matched
 - `text`: text that matched
 """
-function search(ctx::Ctx, pattern::String; ignorecase::Bool=false, pathfilter::Union{Nothing,String}=nothing)
+function search(ctx::Ctx, pattern::String; ignorecase::Bool=false, pathfilter::Union{Nothing,String}=nothing, maxresults::Int=20)
     cmdparts = [csearch]
     if pathfilter !== nothing
         push!(cmdparts, "-f")
@@ -108,9 +108,17 @@ function search(ctx::Ctx, pattern::String; ignorecase::Bool=false, pathfilter::U
         idxpath = joinpath(ctx.store, idx)
         success, out, err = readcmd_with_index(ctx, cmd, idxpath)
         if success
-            for (t,s) in out
+            for (_,s) in out
+                s = strip(s)
+                ( isempty(s) || !startswith(s, "/")) && continue
                 parts = split(s, ':'; limit=3)
-                push!(results, (file=String(parts[1]), line=parse(Int,parts[2]), text=String(parts[3])))
+                (length(parts) != 3) && continue
+                (length(results) > maxresults) && (return results)
+                try
+                    push!(results, (file=String(parts[1]), line=parse(Int,parts[2]), text=String(parts[3])))
+                catch ex
+                    @info "Exception: ",ex
+                end
             end
         end
     end
