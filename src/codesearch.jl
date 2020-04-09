@@ -15,13 +15,39 @@ end
 show(io::IO, ctx::Ctx) = print(io, "GoogleCodeSearch.Ctx(store=\"" * ctx.store * "\")")
 
 function readcmd_with_index(ctx::Ctx, cmd::Cmd, idxpath::String)
-    oc = lock(ctx.lock) do
+    pipe_out = Pipe()
+    pipe_err = Pipe()
+    proc = lock(ctx.lock) do
         withenv("CSEARCHINDEX"=>idxpath) do
-            OutputCollector(cmd)
+            run(pipeline(cmd, stdout=pipe_out, stderr=pipe_err), wait=false)
         end
     end
-    success = wait(oc)
-    success, oc.stdout_linestream.lines, oc.stderr_linestream.lines
+
+    success = false
+    stdout_buff = PipeBuffer()
+    stderr_buff = PipeBuffer()
+
+    @sync begin
+        @async begin
+            wait(proc)
+            success = (proc.exitcode == 0)
+            close(Base.pipe_writer(pipe_out))
+            close(Base.pipe_writer(pipe_err))
+        end
+        @async begin
+            reader_out = Base.pipe_reader(pipe_out)
+            while !(eof(reader_out))
+                write(stdout_buff, readavailable(reader_out))
+            end
+        end
+        @async begin
+            reader_err = Base.pipe_reader(pipe_err)
+            while !(eof(reader_err))
+                write(stderr_buff, readavailable(reader_err))
+            end
+        end
+    end
+    success, readlines(stdout_buff; keep=true), readlines(stderr_buff; keep=true)
 end
 
 """
@@ -44,11 +70,13 @@ Returns a list of paths that have been indexed.
 """
 function paths_indexed(ctx::Ctx)
     paths = Set{String}()
-    cmd = Cmd([cindex, "-list"])
+    cmd = cindex() do cindex_path
+        Cmd([cindex_path, "-list"])
+    end
     for idxpath in indices(ctx)
         success, out, err = readcmd_with_index(ctx, cmd, idxpath)
         if success
-            for (t,m) in out
+            for m in out
                 push!(paths, strip(m))
             end
         else
@@ -62,7 +90,9 @@ end
 Index paths by calling the index method. While indexing, ensure paths are sorted such that paths appearing later are not substrings of those earlier. Otherwise, the earlier indexed entries are erased (strange behavior of `cindex`).
 """
 function index(ctx::Ctx, path::String)
-    cmd = Cmd([cindex, path])
+    cmd = cindex() do cindex_path
+        Cmd([cindex_path, path])
+    end
     success, out, err = readcmd_with_index(ctx, cmd, ctx.resolver(ctx,path))
     success
 end
@@ -76,7 +106,9 @@ function index(ctx::Ctx, paths::Vector{String})
     end
     results = Bool[]
     for (idxpath, paths) in idxpaths
-        cmd = Cmd(append!([cindex], paths))
+        cmd = cindex() do cindex_path
+            Cmd(append!([cindex_path], paths))
+        end
         success, out, err = readcmd_with_index(ctx, cmd, idxpath)
         push!(results, success)
     end
@@ -94,7 +126,9 @@ The search method returns a vector of named tuples, each describing a match.
 - `text`: text that matched
 """
 function search(ctx::Ctx, pattern::String; ignorecase::Bool=false, pathfilter::Union{Nothing,String}=nothing, maxresults::Int=20)
-    cmdparts = [csearch]
+    cmdparts = csearch() do csearch_path
+        [csearch_path]
+    end
     if pathfilter !== nothing
         push!(cmdparts, "-f")
         push!(cmdparts, pathfilter)
@@ -108,7 +142,7 @@ function search(ctx::Ctx, pattern::String; ignorecase::Bool=false, pathfilter::U
         idxpath = joinpath(ctx.store, idx)
         success, out, err = readcmd_with_index(ctx, cmd, idxpath)
         if success
-            for (_,s) in out
+            for s in out
                 s = strip(s)
                 ( isempty(s) || !startswith(s, "/")) && continue
                 parts = split(s, ':'; limit=3)
