@@ -70,17 +70,17 @@ Returns a list of paths that have been indexed.
 """
 function paths_indexed(ctx::Ctx)
     paths = Set{String}()
-    cmd = cindex() do cindex_path
-        Cmd([cindex_path, "-list"])
-    end
-    for idxpath in indices(ctx)
-        success, out, err = readcmd_with_index(ctx, cmd, idxpath)
-        if success
-            for m in out
-                push!(paths, strip(m))
+    cindex() do cindex_path
+        cmd = Cmd([cindex_path, "-list"])
+        for idxpath in indices(ctx)
+            success, out, err = readcmd_with_index(ctx, cmd, idxpath)
+            if success
+                for m in out
+                    push!(paths, strip(m))
+                end
+            else
+                error("error reading index $idxpath")
             end
-        else
-            error("error reading index $idxpath")
         end
     end
     paths
@@ -90,10 +90,10 @@ end
 Index paths by calling the index method. While indexing, ensure paths are sorted such that paths appearing later are not substrings of those earlier. Otherwise, the earlier indexed entries are erased (strange behavior of `cindex`).
 """
 function index(ctx::Ctx, path::String)
-    cmd = cindex() do cindex_path
-        Cmd([cindex_path, path])
+    success, out, err = cindex() do cindex_path
+        cmd = Cmd([cindex_path, path])
+        readcmd_with_index(ctx, cmd, ctx.resolver(ctx,path))
     end
-    success, out, err = readcmd_with_index(ctx, cmd, ctx.resolver(ctx,path))
     success
 end
 
@@ -106,10 +106,10 @@ function index(ctx::Ctx, paths::Vector{String})
     end
     results = Bool[]
     for (idxpath, paths) in idxpaths
-        cmd = cindex() do cindex_path
-            Cmd(append!([cindex_path], paths))
+        success, out, err = cindex() do cindex_path
+            cmd = Cmd(append!([cindex_path], paths))
+            readcmd_with_index(ctx, cmd, idxpath)
         end
-        success, out, err = readcmd_with_index(ctx, cmd, idxpath)
         push!(results, success)
     end
     results
@@ -126,32 +126,32 @@ The search method returns a vector of named tuples, each describing a match.
 - `text`: text that matched
 """
 function search(ctx::Ctx, pattern::String; ignorecase::Bool=false, pathfilter::Union{Nothing,String}=nothing, maxresults::Int=20)
-    cmdparts = csearch() do csearch_path
-        [csearch_path]
-    end
-    if pathfilter !== nothing
-        push!(cmdparts, "-f")
-        push!(cmdparts, pathfilter)
-    end
-    ignorecase && push!(cmdparts, "-i")
-    push!(cmdparts, "-n")
-    push!(cmdparts, pattern)
-    cmd = Cmd(cmdparts)
     results = Vector{NamedTuple{(:file,:line,:text),Tuple{String,Int,String}}}()
-    for idx in readdir(ctx.store)
-        idxpath = joinpath(ctx.store, idx)
-        success, out, err = readcmd_with_index(ctx, cmd, idxpath)
-        if success
-            for s in out
-                s = strip(s)
-                ( isempty(s) || !startswith(s, "/")) && continue
-                parts = split(s, ':'; limit=3)
-                (length(parts) != 3) && continue
-                (length(results) > maxresults) && (return results)
-                try
-                    push!(results, (file=String(parts[1]), line=parse(Int,parts[2]), text=String(parts[3])))
-                catch ex
-                    @info "Exception: ",ex
+    csearch() do csearch_path
+        cmdparts = [csearch_path]
+        if pathfilter !== nothing
+            push!(cmdparts, "-f")
+            push!(cmdparts, pathfilter)
+        end
+        ignorecase && push!(cmdparts, "-i")
+        push!(cmdparts, "-n")
+        push!(cmdparts, pattern)
+        cmd = Cmd(cmdparts)
+        for idx in readdir(ctx.store)
+            idxpath = joinpath(ctx.store, idx)
+            success, out, err = readcmd_with_index(ctx, cmd, idxpath)
+            if success
+                for s in out
+                    s = strip(s)
+                    ( isempty(s) || !startswith(s, "/")) && continue
+                    parts = split(s, ':'; limit=3)
+                    (length(parts) != 3) && continue
+                    (length(results) > maxresults) && (return results)
+                    try
+                        push!(results, (file=String(parts[1]), line=parse(Int,parts[2]), text=String(parts[3])))
+                    catch ex
+                        @info "Exception: ",ex
+                    end
                 end
             end
         end
