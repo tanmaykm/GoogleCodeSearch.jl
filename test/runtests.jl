@@ -49,7 +49,7 @@ function test_indexing(ctx::Ctx, datadir::String)
     paths = Set(joinpath(datadir, item.path) for item in test_data)
     # paths must be in sorted order during indexing, otherwise indexer will remove a longer path when it encounters a path that is a substring of that
     for path in sort(collect(paths))
-        @info("indexing $path")
+        @debug("indexing $path")
         @test index(ctx, path)
         @test !isempty(indices(ctx))
         @test any(occursin(x, path) for x in paths_indexed(ctx))
@@ -163,20 +163,50 @@ function wait_for_httpsrvr()
             close(sock)
             return
         catch
-            @info("waiting for httpserver to come up at port 5555...")
+            @debug("waiting for httpserver to come up at port 5555...")
             sleep(5)
         end
     end
 end
 
-for (resolver_name,resolver) in ("split_index"=>test_index_resolver, "single_index"=>test_default_resolver)
-    println("testing with $resolver_name")
-    mktempdir() do testdir
-        test_apis(testdir, resolver)
+@testset "GoogleCodeSearch" begin
+    @testset "APIs" begin
+        for (resolver_name,resolver) in ("split_index"=>test_index_resolver, "single_index"=>test_default_resolver)
+            @debug("testing with $resolver_name")
+            mktempdir() do testdir
+                test_apis(testdir, resolver)
+            end
+        end
     end
-end
 
-println("testing HTTP service")
-mktempdir() do testdir
-    test_http_service(testdir)
+    @testset "Index read write" begin
+        mktempdir() do testdir
+            idx = GoogleCodeSearch.Index()
+            input_file = joinpath(@__DIR__, "simple.index")
+            output_file = joinpath(testdir, "simple.index")
+            open(input_file, "r") do inp
+                read(inp, idx)
+            end
+            @test length(idx.paths.entries) == 0
+            @test length(idx.names.entries) == 6
+            @test length(idx.postings) == 12
+            @test length(idx.nameindex.entries) == 7
+            @test length(idx.postingindex.entries) == 12
+            @test idx.offsets.path_list == 0x00000010
+            @test idx.offsets.name_list == 0x00000011
+            @test idx.offsets.posting_list == 0x00000037
+            @test idx.offsets.name_index == 0x00000075
+            @test idx.offsets.posting_list_index == 0x00000091
+            open(output_file, "w") do out
+                write(out, idx)
+            end
+            @test read(input_file) == read(output_file)
+        end
+    end
+
+    @testset "HTTP service" begin
+        mktempdir() do testdir
+            test_http_service(testdir)
+        end
+    end
 end
