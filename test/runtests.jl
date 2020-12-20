@@ -109,7 +109,7 @@ function create_test_data(datadir::String)
 end
 
 function test_apis(testdir, resolver)
-    storedir = joinpath(testdir, "store") 
+    storedir = joinpath(testdir, "store")
     datadir = joinpath(testdir, "data")
     create_test_data(datadir)
     mkpath(storedir)
@@ -201,6 +201,104 @@ end
                 write(out, idx)
             end
             @test read(input_file) == read(output_file)
+        end
+    end
+
+    @testset "Index prune" begin
+        mktempdir() do testdir
+            # create index and test all indexed as expected
+            storedir = joinpath(testdir, "store")
+            datadir = joinpath(testdir, "data")
+            create_test_data(datadir)
+            mkpath(storedir)
+
+            ctx = Ctx(store=storedir)
+            test_noindices(ctx)
+            test_indexing(ctx, datadir)
+            test_search(ctx, datadir)
+
+            idx = GoogleCodeSearch.Index()
+            input_file = joinpath(storedir, "index")
+            open(input_file, "r") do inp
+                read(inp, idx)
+            end
+
+            # recreating indices without any changes should leave things unchanged
+            GoogleCodeSearch.recreate_indices!(idx)
+            open(input_file, "w") do out
+                write(out, idx)
+            end
+            ctx = Ctx(store=storedir)
+            test_search(ctx, datadir)
+            @test length(paths_indexed(ctx)) == 2
+            for ignorecase in (true, false)
+                res = search(ctx, "Line1"; ignorecase=ignorecase, pathfilter=".*/path1/.*")
+                if ignorecase
+                    @test !isempty(res)
+                else
+                    @test isempty(res)
+                end
+            end
+
+            # prune one of the paths
+            @test length(idx.paths.entries) == 2
+            @test length(idx.names.entries) == 6
+            @test length(idx.postings) == 29
+            @test length(idx.postings[1].deltas) == 7
+
+            GoogleCodeSearch.prune_paths!(idx, joinpath(datadir, "path1"))
+
+            @test length(idx.paths.entries) == 1
+            @test length(idx.names.entries) == 4
+            @test length(idx.postings) == 27
+            @test length(idx.postings[1].deltas) == 5
+
+            open(input_file, "w") do out
+                write(out, idx)
+            end
+            ctx = Ctx(store=storedir)
+            @test length(paths_indexed(ctx)) == 1
+
+            # test pathfilter
+            for ignorecase in (true, false)
+                res = search(ctx, "Line1"; ignorecase=ignorecase, pathfilter=".*/path1/.*")
+                @test isempty(res)
+            end
+            for ignorecase in (true, false)
+                res = search(ctx, "Line1"; ignorecase=ignorecase, pathfilter=".*/path2/.*")
+                if ignorecase
+                    @test length(res) == 2
+                else
+                    @test isempty(res)
+                end
+            end
+
+            # prune a single file
+            GoogleCodeSearch.prune_files!(idx, joinpath(datadir, "path2", "file1"))
+            @test length(idx.paths.entries) == 1
+            @test length(idx.names.entries) == 3
+            @test length(idx.postings) == 27
+            @test length(idx.postings[1].deltas) == 4
+
+            open(input_file, "w") do out
+                write(out, idx)
+            end
+            ctx = Ctx(store=storedir)
+            @test length(paths_indexed(ctx)) == 1
+
+            # test pathfilter
+            for ignorecase in (true, false)
+                res = search(ctx, "Line1"; ignorecase=ignorecase, pathfilter=".*/path1/.*")
+                @test isempty(res)
+            end
+            for ignorecase in (true, false)
+                res = search(ctx, "Line1"; ignorecase=ignorecase, pathfilter=".*/path2/.*")
+                if ignorecase
+                    @test length(res) == 1
+                else
+                    @test isempty(res)
+                end
+            end
         end
     end
 
