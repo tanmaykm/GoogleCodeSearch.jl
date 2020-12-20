@@ -41,7 +41,33 @@ end
 
 const Postings = Vector{Posting}
 
-fileids(posting::Posting) = resize!(cumsum(posting.deltas), length(posting.deltas)-1) .- Int32(1)
+fileids(posting::Posting) = fileids(posting.deltas)
+fileids(deltas::Vector{UInt32}) = resize!(convert(Vector{UInt32}, cumsum(deltas)), UInt32(length(deltas)-1)) .- UInt32(1)
+function deltas(fileids::Vector{UInt32})
+    ids = convert(Vector{Int32}, fileids)
+    pushfirst!(ids, -1)
+    push!(convert(Vector{UInt32}, diff(ids)), 0)
+end
+function prune!(posting::Posting, id_map::Dict{UInt32,UInt32})
+    fids = fileids(posting)
+    filter!(x->x in keys(id_map), fids)
+    map!(x->id_map[x], fids, fids)
+    empty!(posting.deltas)
+    dlts = deltas(fids)
+    append!(posting.deltas, dlts)
+    posting
+end
+
+function prune!(postings::Postings, id_map::Dict{UInt32,UInt32})
+    for posting in postings
+        prune!(posting, id_map)
+    end
+    # remove empty postings, except the trailer
+    filter!(postings) do posting
+        (posting.trigram == POSTING_LIST_TRAILER_TRIGRAM) || (length(posting.deltas) > 1)
+    end
+    postings
+end
 
 """The name index is a sequence of 4-byte big-endian values listing the byte offset in the name list where each name begins."""
 struct NameIndex
@@ -119,31 +145,122 @@ mutable struct Index
     end
 end
 
-function read(io::IO, idx::Index)
-    total_file_size = UInt32(filesize(io))
+# -----------------------------------------------
+# index manipulation methods
+# -----------------------------------------------
+"""
+Removes the path and all its descendants from the index.
+"""
+prune_paths!(idx::Index, paths::String) = prune_paths!(idx, [paths])
+function prune_paths!(idx::Index, paths::Vector{String})
+    exact_paths = String[]
+    for path in paths
+        for entry in idx.paths.entries
+            if startswith(entry, path)
+                push!(exact_paths, entry)
+            end
+        end
+    end
+    prune_exact_paths!(idx, exact_paths)
+end
 
-    # validate header
-    header_bytes = read(io, length(HEADER_BYTES))
-    (header_bytes != HEADER_BYTES) && error("Not a valid index file")
+function prune_exact_paths!(idx::Index, paths::Vector{String})
+    # do nothing if possible
+    isempty(paths) && (return idx)
 
-    # validate trailer
-    seek(io, total_file_size - length(TRAILER_BYTES))
-    trailer_bytes = read(io, length(TRAILER_BYTES))
-    (trailer_bytes != TRAILER_BYTES) && error("Not a valid index file")
+    filter!(path->!(path in paths), idx.paths.entries)
 
-    # read trailer offsets
-    seek(io, filesize(io) - length(TRAILER_BYTES) - 5*4)
-    read(io, idx.offsets)
+    # prune names list and create ordered list of names and name indices that were pruned
+    nameidxs_to_prune = UInt32[]
+    names_to_prune = String[]
+    for path in paths
+        for (nameidx,name) in enumerate(idx.names.entries)
+            if startswith(name, path)
+                push!(nameidxs_to_prune, UInt32(nameidx-1))
+                push!(names_to_prune, name)
+            end
+        end
+    end
+    prune_files!(idx, names_to_prune, nameidxs_to_prune)
+end
 
-    idx.paths = read_strings(io, idx.offsets.path_list, idx.offsets.name_list - idx.offsets.path_list)
-    idx.names = read_strings(io, idx.offsets.name_list, idx.offsets.posting_list - idx.offsets.name_list)
-    idx.postings = read_postings(io, idx.offsets.posting_list, idx.offsets.name_index - idx.offsets.posting_list)
-    idx.nameindex = read_name_index(io, idx.offsets.name_index, idx.offsets.posting_list_index - idx.offsets.name_index)
-    idx.postingindex = read_posting_index(io, idx.offsets.posting_list_index, UInt32(total_file_size - length(TRAILER_BYTES) - 5*4 - idx.offsets.posting_list_index))
+prune_files!(idx::Index, name_to_prune::String) = prune_files!(idx, [name_to_prune])
+function prune_files!(idx::Index, names_to_prune::Vector{String})
+    nameidxs_to_prune = UInt32[]
+    for (nameidx,name) in enumerate(idx.names.entries)
+        if name in names_to_prune
+            push!(nameidxs_to_prune, nameidx)
+        end
+    end
+    prune_files!(idx, names_to_prune, nameidxs_to_prune)
+end
 
+function prune_files!(idx::Index, names_to_prune::Vector{String}, nameidxs_to_prune::Vector{UInt32})
+    isempty(nameidxs_to_prune) && (return idx)
+    initial_names_count = UInt32(length(idx.names.entries))
+    filter!(name->!(name in names_to_prune), idx.names.entries)
+
+    # create a map of old name index to new index
+    offset = 0
+    namemap = Dict{UInt32,UInt32}()
+    for idx in UInt32(0):initial_names_count
+        if idx in nameidxs_to_prune
+            offset += 1
+        else
+            namemap[idx] = idx-offset
+        end
+    end
+
+    prune!(idx.postings, namemap)
+    recreate_indices!(idx::Index)
+end
+
+function recreate_indices!(idx::Index)
+    idx.offsets.path_list = length(HEADER_BYTES)
+    idx.offsets.name_list = path_list_size(idx) + idx.offsets.path_list
+    idx.offsets.posting_list = recreate_name_index!(idx) + idx.offsets.name_list
+    idx.offsets.name_index = recreate_posting_index!(idx) + idx.offsets.posting_list
+    idx.offsets.posting_list_index = idx.offsets.name_index + UInt32(4 * (length(idx.names.entries) + 1))
     idx
 end
 
+function path_list_size(idx::Index)
+    offset = 0
+    for path in idx.paths.entries
+        offset += UInt32(length(path) + 1)
+    end
+    offset += UInt32(1) # for the null byte list terminator
+    offset
+end
+
+function recreate_name_index!(idx::Index)
+    empty!(idx.nameindex.entries)
+    offset = UInt32(0)
+    for name in idx.names.entries
+        push!(idx.nameindex.entries, offset)
+        offset += UInt32(length(name) + 1)
+    end
+    push!(idx.nameindex.entries, offset) # for the end marker that we do not store in idx.names
+    offset += UInt32(1) # for the null byte list terminator
+    offset
+end
+
+function recreate_posting_index!(idx::Index)
+    empty!(idx.postingindex.entries)
+    offset = UInt32(0)
+    for posting in idx.postings
+        push!(idx.postingindex.entries, PostingIndexEntry(posting.trigram, UInt32(length(posting.deltas)-1), offset))
+        offset += UInt32(3)
+        for delta in posting.deltas
+            offset += UInt32(nbytes_varint_8(delta))
+        end
+    end
+    offset
+end
+
+# -----------------------------------------------
+# base data reader and writer methods
+# -----------------------------------------------
 read_big_endian_4(io) = ntoh(read(io, UInt32))
 write_big_endian_4(io, v::UInt32) = write(io, hton(v))
 
@@ -173,6 +290,49 @@ function write_varint_8(io::IO, x::UInt32)
         nw += write(io, UInt8(byte))
     end
     nw
+end
+
+function nbytes_varint_8(x::UInt32)
+    nw = 0
+    cont = true
+    while cont
+        byte = x & 0x7f
+        if (x >>>= 7) != 0
+            byte |= 0x80
+        else
+            cont = false
+        end
+        nw += 1
+    end
+    nw
+end
+
+# -----------------------------------------------
+# reader methods
+# -----------------------------------------------
+function read(io::IO, idx::Index)
+    total_file_size = UInt32(filesize(io))
+
+    # validate header
+    header_bytes = read(io, length(HEADER_BYTES))
+    (header_bytes != HEADER_BYTES) && error("Not a valid index file")
+
+    # validate trailer
+    seek(io, total_file_size - length(TRAILER_BYTES))
+    trailer_bytes = read(io, length(TRAILER_BYTES))
+    (trailer_bytes != TRAILER_BYTES) && error("Not a valid index file")
+
+    # read trailer offsets
+    seek(io, filesize(io) - length(TRAILER_BYTES) - 5*4)
+    read(io, idx.offsets)
+
+    idx.paths = read_strings(io, idx.offsets.path_list, idx.offsets.name_list - idx.offsets.path_list)
+    idx.names = read_strings(io, idx.offsets.name_list, idx.offsets.posting_list - idx.offsets.name_list)
+    idx.postings = read_postings(io, idx.offsets.posting_list, idx.offsets.name_index - idx.offsets.posting_list)
+    idx.nameindex = read_name_index(io, idx.offsets.name_index, idx.offsets.posting_list_index - idx.offsets.name_index)
+    idx.postingindex = read_posting_index(io, idx.offsets.posting_list_index, UInt32(total_file_size - length(TRAILER_BYTES) - 5*4 - idx.offsets.posting_list_index))
+
+    idx
 end
 
 function read_strings(io, pos::UInt32, nbytes::UInt32)
@@ -243,6 +403,9 @@ function read(io::IO, offsets::IndexTrailerOffsets)
     offsets
 end
 
+# -----------------------------------------------
+# writer methods
+# -----------------------------------------------
 function write(io::IO, offsets::IndexTrailerOffsets)
     n = 0
     n += write_big_endian_4(io, offsets.path_list)

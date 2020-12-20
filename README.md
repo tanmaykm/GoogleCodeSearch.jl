@@ -61,3 +61,32 @@ julia> ctx = Ctx();
 
 julia> run_http(ctx; host=ip"0.0.0.0", port=5555, ops=(:index, :search))
 ```
+
+Also provides methods to read, manipulate and write index files directly from Julia:
+- `prune_paths!(idx, paths::Union{String,Vector{String}})`: Removes paths and files under the path from the index. Note that removing a path will also disable reindexing of that path in future by simply invoking `cindex` to reindex all paths.
+- `prune_files!(idx::Index, files::Union{String,Vector{String}})`: Removes individual files from the index. Path information is retained in the index and will get reindex in future by involing `cindex`.
+
+
+```julia
+julia> using GoogleCodeSearch
+
+julia> index_file = "/tmp/index";
+
+julia> idx = GoogleCodeSearch.Index();
+
+julia> open(index_file, "r") do inp
+           read(inp, idx)
+       end;
+
+julia> # delete all files under path and remove path from index
+
+julia> GoogleCodeSearch.prune_paths!(idx, "/tmp/jl_DmBJhH/data/path1");
+
+julia> # remove file from index
+
+julia> GoogleCodeSearch.prune_files!(idx, "/tmp/jl_DmBJhH/data/path22/file2");
+
+julia> open(index_file, "w") do out
+           write(out, idx)
+       end;
+```
