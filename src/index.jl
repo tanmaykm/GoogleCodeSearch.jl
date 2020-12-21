@@ -145,14 +145,7 @@ mutable struct Index
     end
 end
 
-# -----------------------------------------------
-# index manipulation methods
-# -----------------------------------------------
-"""
-Removes the path and all its descendants from the index.
-"""
-prune_paths!(idx::Index, paths::String) = prune_paths!(idx, [paths])
-function prune_paths!(idx::Index, paths::Vector{String})
+function find_exact_paths(idx::Index, paths::AbstractVector{String})
     exact_paths = String[]
     for path in paths
         for entry in idx.paths.entries
@@ -161,9 +154,27 @@ function prune_paths!(idx::Index, paths::Vector{String})
             end
         end
     end
-    prune_exact_paths!(idx, exact_paths)
+    exact_paths
 end
 
+function find_name_indices(idx::Index, names::AbstractVector{String})
+    nameidxs_to_prune = UInt32[]
+    for (nameidx,name) in enumerate(idx.names.entries)
+        if name in names
+            push!(nameidxs_to_prune, nameidx)
+        end
+    end
+    nameidxs_to_prune
+end
+
+# -----------------------------------------------
+# index manipulation methods
+# -----------------------------------------------
+"""
+Removes the path and all its descendants from the index.
+"""
+prune_paths!(idx::Index, path::String) = prune_paths!(idx, [path])
+prune_paths!(idx::Index, paths::AbstractVector{String}) = prune_exact_paths!(idx, find_exact_paths(idx, paths))
 function prune_exact_paths!(idx::Index, paths::Vector{String})
     # do nothing if possible
     isempty(paths) && (return idx)
@@ -185,17 +196,8 @@ function prune_exact_paths!(idx::Index, paths::Vector{String})
 end
 
 prune_files!(idx::Index, name_to_prune::String) = prune_files!(idx, [name_to_prune])
-function prune_files!(idx::Index, names_to_prune::Vector{String})
-    nameidxs_to_prune = UInt32[]
-    for (nameidx,name) in enumerate(idx.names.entries)
-        if name in names_to_prune
-            push!(nameidxs_to_prune, nameidx)
-        end
-    end
-    prune_files!(idx, names_to_prune, nameidxs_to_prune)
-end
-
-function prune_files!(idx::Index, names_to_prune::Vector{String}, nameidxs_to_prune::Vector{UInt32})
+prune_files!(idx::Index, names_to_prune::AbstractVector{String}) = prune_files!(idx, names_to_prune, find_name_indices(idx, names_to_prune))
+function prune_files!(idx::Index, names_to_prune::AbstractVector{String}, nameidxs_to_prune::Vector{UInt32})
     isempty(nameidxs_to_prune) && (return idx)
     initial_names_count = UInt32(length(idx.names.entries))
     filter!(name->!(name in names_to_prune), idx.names.entries)

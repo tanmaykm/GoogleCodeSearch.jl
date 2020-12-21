@@ -86,6 +86,38 @@ function paths_indexed(ctx::Ctx)
     paths
 end
 
+prune_paths!(ctx::Ctx, path::String) = prune_paths!(ctx, [path])
+function prune_paths!(ctx::Ctx, paths::AbstractVector{String})
+    for index in indices(ctx)
+        idx = Index()
+        open(index, "r") do fp
+            read(fp, idx)
+        end
+        paths_to_prune = find_exact_paths(idx, paths)
+        isempty(paths_to_prune) && continue
+        prune_exact_paths!(idx, paths_to_prune)
+        open(index, "w") do fp
+            write(fp, idx)
+        end
+    end
+end
+
+prune_files!(ctx::Ctx, name::String) = prune_files!(ctx, [name])
+function prune_files!(ctx::Ctx, names::AbstractVector{String})
+    for index in indices(ctx)
+        idx = Index()
+        open(index, "r") do fp
+            read(fp, idx)
+        end
+        idxs_to_prune = find_name_indices(idx, names)
+        isempty(idxs_to_prune) && continue
+        prune_files!(idx, names, idxs_to_prune)
+        open(index, "w") do fp
+            write(fp, idx)
+        end
+    end
+end
+
 """
 Index paths by calling the index method. While indexing, ensure paths are sorted such that paths appearing later are not substrings of those earlier. Otherwise, the earlier indexed entries are erased (strange behavior of `cindex`).
 """

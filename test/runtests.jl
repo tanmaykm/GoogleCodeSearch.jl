@@ -300,6 +300,54 @@ end
                 end
             end
         end
+
+        mktempdir() do testdir
+            # create index and test all indexed as expected
+            storedir = joinpath(testdir, "store")
+            datadir = joinpath(testdir, "data")
+            create_test_data(datadir)
+            mkpath(storedir)
+
+            ctx = Ctx(store=storedir)
+            test_noindices(ctx)
+            test_indexing(ctx, datadir)
+            test_search(ctx, datadir)
+
+            GoogleCodeSearch.prune_paths!(ctx, joinpath(datadir, "path1"))
+            @test length(paths_indexed(ctx)) == 1
+
+            # test pathfilter
+            for ignorecase in (true, false)
+                res = search(ctx, "Line1"; ignorecase=ignorecase, pathfilter=".*/path1/.*")
+                @test isempty(res)
+            end
+            for ignorecase in (true, false)
+                res = search(ctx, "Line1"; ignorecase=ignorecase, pathfilter=".*/path2/.*")
+                if ignorecase
+                    @test length(res) == 2
+                else
+                    @test isempty(res)
+                end
+            end
+
+            # prune a single file
+            GoogleCodeSearch.prune_files!(ctx, joinpath(datadir, "path2", "file1"))
+            @test length(paths_indexed(ctx)) == 1
+
+            # test pathfilter
+            for ignorecase in (true, false)
+                res = search(ctx, "Line1"; ignorecase=ignorecase, pathfilter=".*/path1/.*")
+                @test isempty(res)
+            end
+            for ignorecase in (true, false)
+                res = search(ctx, "Line1"; ignorecase=ignorecase, pathfilter=".*/path2/.*")
+                if ignorecase
+                    @test length(res) == 1
+                else
+                    @test isempty(res)
+                end
+            end
+        end
     end
 
     @testset "HTTP service" begin
