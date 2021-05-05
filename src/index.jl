@@ -214,7 +214,7 @@ function prune_files!(idx::Index, names_to_prune::AbstractVector{String}, nameid
     end
 
     prune!(idx.postings, namemap)
-    recreate_indices!(idx::Index)
+    recreate_indices!(idx)
 end
 
 function recreate_indices!(idx::Index)
@@ -229,7 +229,7 @@ end
 function path_list_size(idx::Index)
     offset = 0
     for path in idx.paths.entries
-        offset += UInt32(length(path) + 1)
+        offset += UInt32(sizeof(path) + 1)
     end
     offset += UInt32(1) # for the null byte list terminator
     offset
@@ -240,7 +240,7 @@ function recreate_name_index!(idx::Index)
     offset = UInt32(0)
     for name in idx.names.entries
         push!(idx.nameindex.entries, offset)
-        offset += UInt32(length(name) + 1)
+        offset += UInt32(sizeof(name) + 1)
     end
     push!(idx.nameindex.entries, offset) # for the end marker that we do not store in idx.names
     offset += UInt32(1) # for the null byte list terminator
