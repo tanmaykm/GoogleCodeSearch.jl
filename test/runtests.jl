@@ -95,6 +95,13 @@ function test_search(ctx::Ctx, datadir::String)
             @test isempty(res)
         end
     end
+
+    # test maxresults
+    for maxresults in (1, 2)
+        res = search(ctx, "Line2"; ignorecase=true, maxresults=maxresults)
+        @test length(res) <= 3  # 3 is the max we have in any split and 2 is the min in any split
+    end
+
     nothing
 end
 

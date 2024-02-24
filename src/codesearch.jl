@@ -14,7 +14,22 @@ end
 
 show(io::IO, ctx::Ctx) = print(io, "GoogleCodeSearch.Ctx(store=\"" * ctx.store * "\")")
 
-function readcmd_with_index(ctx::Ctx, cmd::Cmd, idxpath::String)
+function nlines(buff::Vector{UInt8})
+    n = 0
+    for c in buff
+        if c == UInt8('\n')
+            n += 1
+        end
+    end
+    # check if the last character is not a newline, add one more line
+    (length(buff) > 0) && (buff[end] !== UInt8('\n')) && (n += 1)
+    n
+end
+
+function readcmd_with_index(ctx::Ctx, cmd::Cmd, idxpath::String;
+        maxlines_stdout::Union{Integer,Nothing}=nothing,
+        maxlines_stderr::Union{Integer,Nothing}=nothing,
+    )
     pipe_out = Pipe()
     pipe_err = Pipe()
     proc = lock(ctx.lock) do
@@ -26,24 +41,50 @@ function readcmd_with_index(ctx::Ctx, cmd::Cmd, idxpath::String)
     success = false
     stdout_buff = PipeBuffer()
     stderr_buff = PipeBuffer()
+    nlines_stdout = 0
+    nlines_stderr = 0
+    interrupted = false
 
     @sync begin
         @async begin
-            wait(proc)
-            success = (proc.exitcode == 0)
-            close(Base.pipe_writer(pipe_out))
-            close(Base.pipe_writer(pipe_err))
+            try
+                wait(proc)
+            catch ex
+                interrupted || rethrow(ex)
+            finally
+                success = interrupted || (proc.exitcode == 0)
+                close(Base.pipe_writer(pipe_out))
+                close(Base.pipe_writer(pipe_err))
+            end
         end
         @async begin
             reader_out = Base.pipe_reader(pipe_out)
             while !(eof(reader_out))
-                write(stdout_buff, readavailable(reader_out))
+                read_buff = readavailable(reader_out)
+                write(stdout_buff, read_buff)
+                if !isnothing(maxlines_stdout)
+                    nlines_stdout += nlines(read_buff)
+                    if nlines_stdout >= maxlines_stdout
+                        interrupted = true
+                        kill(proc)
+                        break
+                    end
+                end
             end
         end
         @async begin
             reader_err = Base.pipe_reader(pipe_err)
             while !(eof(reader_err))
-                write(stderr_buff, readavailable(reader_err))
+                read_buff = readavailable(reader_err)
+                write(stderr_buff, read_buff)
+                if !isnothing(maxlines_stderr)
+                    nlines_stderr += nlines(read_buff)
+                    if nlines_stderr >= maxlines_stderr
+                        interrupted = true
+                        kill(proc)
+                        break
+                    end
+                end
             end
         end
     end
@@ -171,7 +212,7 @@ function search(ctx::Ctx, pattern::String; ignorecase::Bool=false, pathfilter::U
         cmd = Cmd(cmdparts)
         for idx in readdir(ctx.store)
             idxpath = joinpath(ctx.store, idx)
-            success, out, err = readcmd_with_index(ctx, cmd, idxpath)
+            success, out, err = readcmd_with_index(ctx, cmd, idxpath; maxlines_stdout=maxresults, maxlines_stderr=maxresults)
             if success
                 for s in out
                     s = strip(s)
