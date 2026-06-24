@@ -26,7 +26,10 @@ end
 
 function read_req(req::HTTP.Request)
     body = is_http_2 ? String(req.body) : String(HTTP.payload(req))
-    isempty(body) ? nothing : JSON.parse(body)
+    # `dicttype` keeps the parsed object a `Dict{String,Any}` across both
+    # JSON.jl 0.21 (default) and 1.x (which otherwise returns a `JSON.Object`),
+    # so the `handle_*` methods dispatch correctly under either version.
+    isempty(body) ? nothing : JSON.parse(body; dicttype=Dict{String,Any})
 end
 
 function prep_router(ctx::Ctx, ops)

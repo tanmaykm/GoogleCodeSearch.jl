@@ -19,5 +19,5 @@ test = ["Test"]
 [compat]
 julia = "1.3"
 HTTP = "0.8,0.9,1,2"
-JSON = "0.21"
+JSON = "0.21, 1"
 GoogleCodeSearch_jll = "1.2"
