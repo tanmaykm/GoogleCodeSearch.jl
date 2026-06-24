@@ -1,5 +1,10 @@
 const is_http_10 = !isdefined(HTTP, :handle) && !isdefined(HTTP, Symbol("@register")) && isdefined(HTTP, :register!)
 
+# HTTP.jl 2.0 dropped `HTTP.payload` and requires a `String` host for `serve`.
+# `payload`'s absence distinguishes 2.x from 0.8/0.9/1.x. The router/`register!`
+# surface is unchanged, so the `is_http_10` path covers 2.0 routing as-is.
+const is_http_2 = !isdefined(HTTP, :payload)
+
 if is_http_10
     macro register(r, method, path, handler)
     end
@@ -20,8 +25,8 @@ function handle_search(ctx::Ctx, req::Dict{String,Any})
 end
 
 function read_req(req::HTTP.Request)
-    body = HTTP.payload(req)
-    isempty(body) ? nothing : JSON.parse(String(body))
+    body = is_http_2 ? String(req.body) : String(HTTP.payload(req))
+    isempty(body) ? nothing : JSON.parse(body)
 end
 
 function prep_router(ctx::Ctx, ops)
@@ -40,7 +45,9 @@ end
 function run_http(ctx::Ctx; host=ip"0.0.0.0", port=5555, ops=(:index, :search), kwargs...)
     resp_headers = ["Content-Type" => "application/json; charset=utf-8", "Cache-Control" => "no-cache"]
     router = prep_router(ctx, ops)
-    HTTP.serve(host, port; kwargs...) do req::HTTP.Request
+    # HTTP.jl 2.0 `serve` takes a `String` host rather than an `IPAddr`.
+    serve_host = is_http_2 ? string(host) : host
+    HTTP.serve(serve_host, port; kwargs...) do req::HTTP.Request
         resp = try
             if is_http_10
                 data = router(req)
@@ -52,6 +59,12 @@ function run_http(ctx::Ctx; host=ip"0.0.0.0", port=5555, ops=(:index, :search), 
             @warn("exception processing req", req, ex)
             (success=false, data="unknown error")
         end
-        HTTP.Response(200, resp_headers; body=JSON.json(resp), request=req)
+        # 3-positional form works across 1.x and 2.0; the `headers; body=` kwarg
+        # form drops headers under 2.0's `Response(status, body; ...)` overload.
+        if is_http_2
+            HTTP.Response(200, resp_headers, JSON.json(resp); request=req)
+        else
+            HTTP.Response(200, resp_headers; body=JSON.json(resp), request=req)
+        end
     end
 end
